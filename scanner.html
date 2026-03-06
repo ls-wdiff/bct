@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="theme-color" content="#000000" />
+  <link rel="manifest" href="manifest.json" />
+  <title>Scan → Barcode</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/bwip-js/3.4.0/bwip-js-min.js"></script>
+  <style>
+    :root {
+      --accent: #4fc3f7;
+      --green:  #4caf50;
+      --red:    #ef5350;
+      --amber:  #ffab00;
+      --text:   #f0f0f0;
+      --muted:  rgba(240,240,240,0.55);
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      width: 100%; height: 100%;
+      background: #000;
+      overflow: hidden;
+      font-family: 'Inter', system-ui, sans-serif;
+      color: var(--text);
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    /* Full-screen canvas — image + draw overlay live here */
+    #canvas {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 1;
+      display: block;
+      cursor: crosshair;
+    }
+
+    /* Top bar */
+    #topbar {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 20px;
+      background: linear-gradient(to bottom, rgba(0,0,0,0.72), transparent);
+      pointer-events: none;
+    }
+
+    #topbar-title { font-size: 0.9rem; font-weight: 700; letter-spacing: 0.02em; }
+
+    .mini-toggle {
+      display: flex; align-items: center; gap: 8px;
+      cursor: pointer; pointer-events: auto;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .mini-toggle span { font-size: 0.7rem; font-weight: 600; color: var(--muted); letter-spacing: 0.04em; transition: color 0.2s; }
+    .mini-toggle span.on { color: var(--accent); }
+
+    .pill { position: relative; width: 44px; height: 24px; flex-shrink: 0; }
+    .pill input { position: absolute; opacity: 0; width: 0; height: 0; }
+    .pill-track { position: absolute; inset: 0; background: #444; border-radius: 999px; transition: background 0.2s; }
+    .pill input:checked ~ .pill-track { background: var(--accent); }
+    .pill-thumb { position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; background: #fff; border-radius: 50%; transition: transform 0.2s; box-shadow: 0 1px 3px rgba(0,0,0,0.5); }
+    .pill input:checked ~ .pill-thumb { transform: translateX(20px); }
+
+    /* Bottom bar */
+    #bottombar {
+      position: fixed;
+      bottom: 0; left: 0; right: 0;
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 16px 24px 40px;
+      gap: 12px;
+      background: linear-gradient(to top, rgba(0,0,0,0.75), transparent);
+      pointer-events: none;
+    }
+
+    #hint {
+      font-size: 0.8rem;
+      color: var(--muted);
+      text-align: center;
+      min-height: 18px;
+      letter-spacing: 0.01em;
+    }
+
+    #shutter {
+      width: 72px; height: 72px;
+      border-radius: 50%;
+      border: 3px solid #fff;
+      background: rgba(255,255,255,0.15);
+      backdrop-filter: blur(4px);
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: transform 0.1s, background 0.15s;
+      -webkit-tap-highlight-color: transparent;
+      pointer-events: auto;
+    }
+
+    #shutter:active { transform: scale(0.92); background: rgba(255,255,255,0.3); }
+    #shutter .inner { width: 52px; height: 52px; border-radius: 50%; background: #fff; }
+
+    #retake {
+      display: none;
+      background: rgba(0,0,0,0.5);
+      border: 1.5px solid rgba(255,255,255,0.25);
+      border-radius: 999px;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 0.85rem;
+      font-weight: 600;
+      padding: 10px 28px;
+      cursor: pointer;
+      backdrop-filter: blur(6px);
+      -webkit-tap-highlight-color: transparent;
+      pointer-events: auto;
+    }
+
+    #retake:active { background: rgba(255,255,255,0.1); }
+
+    /* Spinner */
+    #spinner-wrap {
+      display: none;
+      position: fixed; inset: 0;
+      z-index: 20;
+      align-items: center; justify-content: center;
+      flex-direction: column; gap: 16px;
+      background: rgba(0,0,0,0.5);
+      pointer-events: none;
+    }
+
+    .ring {
+      width: 52px; height: 52px;
+      border: 3px solid rgba(79,195,247,0.2);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.75s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #spinner-wrap p { font-size: 0.82rem; color: var(--muted); }
+
+    /* Toast */
+    #toast {
+      position: fixed;
+      bottom: 140px; left: 50%;
+      transform: translateX(-50%) translateY(10px);
+      z-index: 30;
+      background: rgba(18,18,18,0.92);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 999px;
+      padding: 10px 22px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      opacity: 0;
+      transition: opacity 0.2s, transform 0.2s;
+      pointer-events: none;
+      backdrop-filter: blur(8px);
+      max-width: 88vw;
+      text-align: center;
+    }
+
+    #toast.show   { opacity: 1; transform: translateX(-50%) translateY(0); }
+    #toast.success { color: var(--green); }
+    #toast.error   { color: var(--red); }
+    #toast.warn    { color: var(--amber); }
+
+    /* Idle prompt */
+    #idle-prompt {
+      position: fixed; inset: 0;
+      z-index: 5;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 16px; pointer-events: none;
+    }
+
+    .scan-icon {
+      width: 80px; height: 80px;
+      border: 3px solid rgba(79,195,247,0.4);
+      border-radius: 16px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 36px; color: rgba(79,195,247,0.6);
+    }
+
+    #idle-prompt p { font-size: 0.85rem; color: var(--muted); letter-spacing: 0.03em; }
+
+    #cam-input { display: none; }
+    #barcode-canvas { display: none; }
+  </style>
+</head>
+<body>
+
+<canvas id="canvas"></canvas>
+
+<div id="idle-prompt">
+  <div class="scan-icon">⊞</div>
+  <p>Opening camera…</p>
+</div>
+
+<div id="topbar">
+  <span id="topbar-title">Scan → Barcode</span>
+  <div class="mini-toggle" id="cr-wrap">
+    <span id="cr-label" class="on">+CR</span>
+    <label class="pill" onclick="event.stopPropagation()">
+      <input type="checkbox" id="cr-toggle" checked />
+      <div class="pill-track"></div>
+      <div class="pill-thumb"></div>
+    </label>
+  </div>
+</div>
+
+<div id="bottombar">
+  <div id="hint"></div>
+  <button id="shutter"><div class="inner"></div></button>
+  <button id="retake">↩ Retake</button>
+</div>
+
+<div id="spinner-wrap">
+  <div class="ring"></div>
+  <p id="spinner-msg">Reading text…</p>
+</div>
+
+<div id="toast"></div>
+
+<input type="file" id="cam-input" accept="image/*" capture="environment" />
+<canvas id="barcode-canvas"></canvas>
+
+<script>
+  const canvas       = document.getElementById('canvas');
+  const ctx          = canvas.getContext('2d');
+  const shutterBtn   = document.getElementById('shutter');
+  const retakeBtn    = document.getElementById('retake');
+  const hintEl       = document.getElementById('hint');
+  const spinnerWrap  = document.getElementById('spinner-wrap');
+  const spinnerMsg   = document.getElementById('spinner-msg');
+  const toastEl      = document.getElementById('toast');
+  const camInput     = document.getElementById('cam-input');
+  const crToggle     = document.getElementById('cr-toggle');
+  const crLabel      = document.getElementById('cr-label');
+  const crWrap       = document.getElementById('cr-wrap');
+  const idlePrompt   = document.getElementById('idle-prompt');
+  const barcodeCanvas = document.getElementById('barcode-canvas');
+
+  // ── State: IDLE | DRAW | PROCESSING ──
+  let appState = 'IDLE';
+
+  // Loaded image + its canvas layout
+  let loadedImg   = null;
+  let imgLayout   = null; // { x, y, w, h } of drawn image in CSS px
+
+  // Draw state
+  let isDrawing = false;
+  let drawStart = null; // {x, y}
+  let drawRect  = null; // {x, y, w, h} in CSS px
+
+  // ── Canvas sizing ──
+  // Sets canvas logical px = CSS px (no DPR scaling to keep coordinate maths simple)
+  function resizeCanvas() {
+    canvas.width  = canvas.offsetWidth;
+    canvas.height = canvas.offsetHeight;
+    if (loadedImg && imgLayout) renderImage();
+  }
+
+  window.addEventListener('resize', resizeCanvas);
+  resizeCanvas();
+
+  // ── CR toggle ──
+  crWrap.addEventListener('click', () => {
+    crToggle.checked = !crToggle.checked;
+    crLabel.textContent = crToggle.checked ? '+CR' : 'CR off';
+    crLabel.className   = crToggle.checked ? 'on' : '';
+  });
+
+  // ── Toast ──
+  let toastTimer;
+  function toast(msg, type = '', ms = 2600) {
+    clearTimeout(toastTimer);
+    toastEl.textContent = msg;
+    toastEl.className = 'show ' + type;
+    toastTimer = setTimeout(() => toastEl.className = '', ms);
+  }
+
+  // ── State machine ──
+  function setState(s) {
+    appState = s;
+
+    const isIdle = s === 'IDLE';
+    const isDraw = s === 'DRAW';
+    const isProc = s === 'PROCESSING';
+
+    idlePrompt.style.display  = isIdle ? 'flex' : 'none';
+    spinnerWrap.style.display = isProc ? 'flex' : 'none';
+    shutterBtn.style.display  = isIdle ? 'flex' : 'none';
+    retakeBtn.style.display   = isDraw ? 'block' : 'none';
+
+    // Canvas draws: idle = no interaction, draw = crosshair, processing = none
+    canvas.style.pointerEvents = isDraw ? 'auto' : 'none';
+    canvas.style.cursor = isDraw ? 'crosshair' : 'default';
+
+    if (isIdle) hintEl.textContent = '';
+    if (isDraw) hintEl.textContent = 'Draw a box around the text';
+    if (isProc) hintEl.textContent = '';
+  }
+
+  // ── Render loaded image to canvas (contain, centred) ──
+  function renderImage(selectionRect) {
+    if (!loadedImg) return;
+
+    const cw = canvas.width;
+    const ch = canvas.height;
+    const scale   = Math.min(cw / loadedImg.naturalWidth, ch / loadedImg.naturalHeight);
+    const imgW    = loadedImg.naturalWidth  * scale;
+    const imgH    = loadedImg.naturalHeight * scale;
+    const imgX    = (cw - imgW) / 2;
+    const imgY    = (ch - imgH) / 2;
+
+    imgLayout = { x: imgX, y: imgY, w: imgW, h: imgH, scale };
+
+    ctx.clearRect(0, 0, cw, ch);
+    ctx.drawImage(loadedImg, imgX, imgY, imgW, imgH);
+
+    // Draw selection rect if provided
+    if (selectionRect) {
+      const { x, y, w, h } = selectionRect;
+      // Dim outside selection
+      ctx.fillStyle = 'rgba(0,0,0,0.45)';
+      ctx.fillRect(0,   0,   cw,  y);           // top
+      ctx.fillRect(0,   y+h, cw,  ch-(y+h));    // bottom
+      ctx.fillRect(0,   y,   x,   h);           // left
+      ctx.fillRect(x+w, y,   cw-(x+w), h);      // right
+
+      // Selection border
+      ctx.strokeStyle = '#4fc3f7';
+      ctx.lineWidth   = 2.5;
+      ctx.setLineDash([6, 3]);
+      ctx.strokeRect(x, y, w, h);
+      ctx.setLineDash([]);
+
+      // Corner handles
+      const hs = 10;
+      ctx.fillStyle = '#4fc3f7';
+      [[x,y],[x+w,y],[x,y+h],[x+w,y+h]].forEach(([cx,cy]) => {
+        ctx.fillRect(cx - hs/2, cy - hs/2, hs, hs);
+      });
+    }
+  }
+
+  // ── Touch/pointer helpers: get CSS-pixel position relative to canvas ──
+  function getPos(e) {
+    const r = canvas.getBoundingClientRect();
+    const src = e.touches ? e.touches[0] : e;
+    return {
+      x: src.clientX - r.left,
+      y: src.clientY - r.top
+    };
+  }
+
+  // ── Draw events ──
+  function onDrawStart(e) {
+    if (appState !== 'DRAW') return;
+    e.preventDefault();
+    isDrawing = true;
+    drawStart = getPos(e);
+    drawRect  = null;
+  }
+
+  function onDrawMove(e) {
+    if (!isDrawing) return;
+    e.preventDefault();
+    const cur = getPos(e);
+    drawRect = {
+      x: Math.min(drawStart.x, cur.x),
+      y: Math.min(drawStart.y, cur.y),
+      w: Math.abs(cur.x - drawStart.x),
+      h: Math.abs(cur.y - drawStart.y),
+    };
+    renderImage(drawRect);
+  }
+
+  function onDrawEnd(e) {
+    if (!isDrawing) return;
+    e.preventDefault();
+    isDrawing = false;
+
+    // Require a minimum box size to avoid accidental taps
+    if (!drawRect || drawRect.w < 20 || drawRect.h < 20) {
+      drawRect = null;
+      renderImage();
+      return;
+    }
+
+    processSelection(drawRect);
+  }
+
+  canvas.addEventListener('mousedown',  onDrawStart);
+  canvas.addEventListener('mousemove',  onDrawMove);
+  canvas.addEventListener('mouseup',    onDrawEnd);
+  canvas.addEventListener('touchstart', onDrawStart, { passive: false });
+  canvas.addEventListener('touchmove',  onDrawMove,  { passive: false });
+  canvas.addEventListener('touchend',   onDrawEnd,   { passive: false });
+
+  // ── Crop drawn region → run TextDetector → generate ──
+  async function processSelection(rect) {
+    setState('PROCESSING');
+
+    try {
+      // Translate canvas-px rect back to natural image coords
+      const { x: ix, y: iy, scale } = imgLayout;
+      const cropX = Math.max(0, (rect.x - ix) / scale);
+      const cropY = Math.max(0, (rect.y - iy) / scale);
+      const cropW = Math.min(rect.w / scale, loadedImg.naturalWidth  - cropX);
+      const cropH = Math.min(rect.h / scale, loadedImg.naturalHeight - cropY);
+
+      // Draw just the cropped region at 2x upscale (helps TextDetector on small text)
+      const cropCanvas = document.createElement('canvas');
+      cropCanvas.width  = cropW * 2;
+      cropCanvas.height = cropH * 2;
+      const cropCtx = cropCanvas.getContext('2d');
+      cropCtx.drawImage(
+        loadedImg,
+        cropX, cropY, cropW, cropH,
+        0, 0, cropCanvas.width, cropCanvas.height
+      );
+
+      spinnerMsg.textContent = 'Reading text…';
+      const detector = new TextDetector();
+      const results  = await detector.detect(cropCanvas);
+
+      if (!results || results.length === 0) {
+        toast('No text found in selection — try a tighter box', 'warn');
+        setState('DRAW');
+        renderImage();
+        return;
+      }
+
+      // Join all detected strings in the crop (handles split words)
+      const text = results.map(r => r.rawValue).join(' ').trim();
+
+      if (!text) {
+        toast('No text found — try again', 'warn');
+        setState('DRAW');
+        renderImage();
+        return;
+      }
+
+      generateBarcode(text);
+
+    } catch (err) {
+      toast('✗ ' + (err.message || err), 'error');
+      setState('DRAW');
+      renderImage();
+    }
+  }
+
+  // ── Generate barcode and open viewer ──
+  function generateBarcode(text) {
+    const addCR  = crToggle.checked;
+    const encoded = addCR ? text + '\r' : text;
+
+    try {
+      bwipjs.toCanvas(barcodeCanvas, {
+        bcid:            'code128',
+        text:            encoded,
+        scale:           3,
+        height:          16,
+        includetext:     true,
+        textxalign:      'center',
+        textfont:        'Helvetica',
+        textsize:        12,
+        backgroundcolor: 'ffffff',
+        alttext:         text,
+        paddingwidth:    6,
+        paddingheight:   4,
+      });
+
+      barcodeCanvas.toBlob(blob => {
+        window.open(URL.createObjectURL(blob), '_blank');
+        toast('✔ ' + text + (addCR ? '  +CR' : ''), 'success');
+        // Reset for next scan
+        loadedImg  = null;
+        imgLayout  = null;
+        drawRect   = null;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        setState('IDLE');
+      }, 'image/png');
+
+    } catch (err) {
+      toast('✗ Barcode error: ' + err.message, 'error');
+      setState('DRAW');
+      renderImage();
+    }
+  }
+
+  // ── Shutter ──
+  shutterBtn.addEventListener('click', () => {
+    camInput.value = '';
+    camInput.click();
+  });
+
+  // ── Photo returned ──
+  camInput.addEventListener('change', async () => {
+    const file = camInput.files[0];
+    if (!file) return;
+
+    spinnerMsg.textContent = 'Loading photo…';
+    setState('PROCESSING');
+
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      loadedImg = img;
+      URL.revokeObjectURL(url);
+      resizeCanvas();
+      renderImage();
+      setState('DRAW');
+    };
+    img.onerror = () => {
+      toast('Could not load image', 'error');
+      setState('IDLE');
+    };
+    img.src = url;
+  });
+
+  // ── Retake ──
+  retakeBtn.addEventListener('click', () => {
+    loadedImg = null; imgLayout = null; drawRect = null;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    setState('IDLE');
+    setTimeout(() => { camInput.value = ''; camInput.click(); }, 80);
+  });
+
+  // ── Register service worker ──
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  }
+
+  // ── URL param: ?code=SOMETEXT → pre-fill and generate immediately ──
+  // Useful for home screen shortcuts.
+  const urlCode = new URLSearchParams(window.location.search).get('code');
+  if (urlCode && urlCode.trim()) {
+    window.addEventListener('load', () => generateBarcode(urlCode.trim()));
+  }
+
+  // ── Boot: open camera immediately ──
+  setState('IDLE');
+  // Small delay lets the browser finish rendering before the file picker fires
+  setTimeout(() => {
+    camInput.value = '';
+    camInput.click();
+  }, 300);
+</script>
+</body>
+</html>
