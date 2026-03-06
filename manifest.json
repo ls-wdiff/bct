@@ -2,8 +2,7 @@
   "name": "Barcode Tools",
   "short_name": "Barcodes",
   "description": "Scan text and generate Code128 barcodes",
-  "start_url": "/bct/scanner.html",
-  "scope": "/bct/",
+  "start_url": "/scanner.html",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#000000",
@@ -27,14 +26,14 @@
       "name": "Scan → Barcode",
       "short_name": "Scan",
       "description": "Open camera and scan text",
-      "url": "/bct/scanner.html",
+      "url": "/scanner.html",
       "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }]
     },
     {
       "name": "Barcode Generator",
       "short_name": "Generator",
       "description": "Manually create a barcode",
-      "url": "/bct/generator.html",
+      "url": "/generator.html",
       "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }]
     }
   ]
