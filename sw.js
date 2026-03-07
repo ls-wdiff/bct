@@ -1,4 +1,4 @@
-const CACHE = 'barcode-tools-v2';
+const CACHE = 'barcode-tools-v3';
 
 const ASSETS = [
   '/bct/scanner.html',
