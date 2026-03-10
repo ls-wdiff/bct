@@ -164,7 +164,7 @@
   <label id="shoot-label">
     <input type="file" accept="image/*" capture="environment" id="file-input" />
     <div class="shutter-ring"><div class="shutter-inner"></div></div>
-    <span id="shoot-hint">Text 2 Barcode</span>
+    <span id="shoot-hint">Tap to photograph text</span>
   </label>
 </div>
 
@@ -212,8 +212,10 @@ const ringCtx    = timerRing.getContext('2d');
 
 // ── Tuning constants ──
 const Y_OFFSET  = 80;   // px above touch point so finger never hides selection
-const H_BIAS    = 1.8;  // horizontal grows faster than vertical
+const H_BIAS    = 1.44; // horizontal grows faster than vertical (1.8 × 0.8)
+const VELOCITY  = 0.8;  // overall drag speed multiplier (20% slower)
 const MIN_DIM   = 20;
+const ZOOM      = 0.75; // 1.0 = full cover crop, lower shows more of the photo
 const AUTO_MS   = 2000; // ms of inactivity before auto-read
 
 // ── State ──
@@ -330,7 +332,7 @@ function setupCropView() {
   resetAutoTimer();
 }
 
-// ── Render photo to fill canvas (cover) ──
+// ── Render photo to fill canvas (cover, with zoom-out factor) ──
 function renderPhoto() {
   const W = photoCanvas.width, H = photoCanvas.height;
   const imgR = photoImg.naturalWidth / photoImg.naturalHeight;
@@ -343,6 +345,10 @@ function renderPhoto() {
     sw = photoImg.naturalWidth;  sh = sw / canR;
     sx = 0; sy = (photoImg.naturalHeight - sh) / 2;
   }
+  // ZOOM < 1 shows more of the original image (less magnification)
+  sw *= ZOOM; sh *= ZOOM;
+  sx = (photoImg.naturalWidth  - sw) / 2;
+  sy = (photoImg.naturalHeight - sh) / 2;
   photoCtx.drawImage(photoImg, sx, sy, sw, sh, 0, 0, W, H);
 }
 
@@ -397,9 +403,15 @@ overlayCanvas.addEventListener('touchmove', e => {
   const rect = overlayCanvas.getBoundingClientRect();
   const curX = t.clientX - rect.left;
   const curY = (t.clientY - rect.top) - Y_OFFSET;
-  const dx = (curX - startX) * H_BIAS;
-  const dy =  curY - startY;
-  box = normalizeBox(startX, startY, dx, dy);
+  // Half-width expands symmetrically from startX in both directions
+  const halfW = Math.abs(curX - startX) * H_BIAS * VELOCITY;
+  const dy    = (curY - startY) * VELOCITY;
+  box = {
+    x: startX - halfW,
+    y: dy >= 0 ? startY       : startY + dy,
+    w: Math.max(MIN_DIM, halfW * 2),
+    h: Math.max(MIN_DIM, Math.abs(dy))
+  };
   renderOverlay();
   resetAutoTimer();
 }, { passive: false });
@@ -421,10 +433,15 @@ overlayCanvas.addEventListener('mousedown', e => {
 });
 overlayCanvas.addEventListener('mousemove', e => {
   if (!drawing) return;
-  const rect = overlayCanvas.getBoundingClientRect();
-  const dx = (e.clientX - rect.left - startX) * H_BIAS;
-  const dy =  e.clientY - rect.top  - startY;
-  box = normalizeBox(startX, startY, dx, dy);
+  const rect  = overlayCanvas.getBoundingClientRect();
+  const halfW = Math.abs(e.clientX - rect.left - startX) * H_BIAS * VELOCITY;
+  const dy    = (e.clientY - rect.top - startY) * VELOCITY;
+  box = {
+    x: startX - halfW,
+    y: dy >= 0 ? startY       : startY + dy,
+    w: Math.max(MIN_DIM, halfW * 2),
+    h: Math.max(MIN_DIM, Math.abs(dy))
+  };
   renderOverlay();
   resetAutoTimer();
 });
